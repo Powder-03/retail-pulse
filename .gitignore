@@ -1,0 +1,41 @@
+# Python & uv
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Environment & Secrets
+.env
+*.pem
+*.key
+
+# Data Lakehouse & Databases (keep directory placeholders)
+data/source/*
+!data/source/.gitkeep
+data/bronze/*
+!data/bronze/.gitkeep
+data/silver/*
+!data/silver/.gitkeep
+data/gold/*
+!data/gold/.gitkeep
+*.duckdb
+*.duckdb.wal
+*.parquet
+*.db
+*.sqlite
+
+# Airflow runtime logs & configs
+logs/
+airflow.cfg
+webserver_config.py
+
+# Power BI & OS artifacts
+*.pbix.tmp
+.DS_Store
+Thumbs.db
+.vscode/
+
+docs/

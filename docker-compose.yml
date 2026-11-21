@@ -1,0 +1,122 @@
+x-airflow-common: &airflow-common
+  build:
+    context: .
+    dockerfile: Dockerfile
+    target: airflow
+  env_file:
+    - .env
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-retail_admin}:${POSTGRES_PASSWORD:-retail_secret_pass}@postgres:5432/${AIRFLOW_DB:-airflow_db}
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY:-46BKJoQYlPPOexq0OhDZnIlNepKFf87WFwLbfzqDDho=}
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__API__AUTH_BACKENDS: "airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session"
+    PYTHONPATH: /opt/airflow
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./src:/opt/airflow/src
+    - ./sql:/opt/airflow/sql
+    - lakehouse_data:/opt/airflow/data
+    - airflow_logs:/opt/airflow/logs
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on:
+    postgres:
+      condition: service_healthy
+  networks:
+    - retail_net
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: retail_postgres
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-retail_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-retail_secret_pass}
+      POSTGRES_DB: ${POSTGRES_DB:-retail_db}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-retail_admin} -d ${POSTGRES_DB:-retail_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - retail_net
+
+  airflow-init:
+    <<: *airflow-common
+    container_name: retail_airflow_init
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        mkdir -p /opt/airflow/data/{source,bronze,silver,gold} /opt/airflow/logs
+        airflow db migrate
+        airflow users create \
+          --username "${AIRFLOW_ADMIN_USER:-admin}" \
+          --firstname First \
+          --lastname Last \
+          --role Admin \
+          --email admin@retail.local \
+          --password "${AIRFLOW_ADMIN_PASSWORD:-admin}" || true
+    restart: "no"
+
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: retail_airflow_webserver
+    command: webserver
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: retail_airflow_scheduler
+    command: scheduler
+    restart: unless-stopped
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+  streamlit:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: app
+    container_name: retail_streamlit_dashboard
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./src:/app/src
+      - ./sql:/app/sql
+      - lakehouse_data:/app/data
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      PYTHONPATH: /app
+    command: uv run streamlit run src/dashboard/app.py --server.address 0.0.0.0 --server.port 8501
+
+volumes:
+  postgres_data:
+  airflow_logs:
+  lakehouse_data:
+
+networks:
+  retail_net:
+    driver: bridge
