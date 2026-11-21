@@ -2,7 +2,7 @@ from pathlib import Path
 import duckdb
 from sqlalchemy import create_engine, text
 
-from src.config import DUCKDB_PATH, POSTGRES_URI, SILVER_DIR, SQL_DIR
+from src.config import AWS_S3_BUCKET, DUCKDB_PATH, POSTGRES_URI, SILVER_DIR, SQL_DIR, sync_to_s3
 
 GOLD_OBJECTS_TO_SYNC = [
     "dim_product",
@@ -46,6 +46,8 @@ def build_duckdb_gold(
         for obj_name in GOLD_OBJECTS_TO_SYNC:
             count = con.execute(f"SELECT COUNT(*) FROM {obj_name}").fetchone()[0]
             row_counts[obj_name] = int(count)
+        if AWS_S3_BUCKET:
+            sync_to_s3(duckdb_path.parent, "gold")
         return row_counts
     finally:
         con.close()

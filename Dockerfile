@@ -48,5 +48,6 @@ RUN pip install --no-cache-dir \
     pyarrow>=15.0.0 \
     duckdb>=1.1.0 \
     plotly>=5.22.0 \
-    groq>=0.9.0 \
+    google-genai>=0.1.0 \
+    boto3>=1.34.0 \
     python-dotenv>=1.0.1

@@ -16,7 +16,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.engine import Engine
 
-from src.config import BRONZE_DIR, POSTGRES_URI, SOURCE_DIR
+from src.config import AWS_S3_BUCKET, BRONZE_DIR, POSTGRES_URI, SOURCE_DIR, sync_to_s3
 
 EXPECTED_SCHEMAS: dict[str, set[str]] = {
     "sales": {"invoice_id", "invoice_date", "product_id", "store_id", "quantity", "unit_price"},
@@ -209,6 +209,9 @@ def run_ingestion(
             if file_path.is_file() and not file_path.name.startswith("."):
                 status = ingest_file(file_path, dataset, engine, bronze_root=bronze_root)
                 counts[status] += 1
+
+    if AWS_S3_BUCKET:
+        sync_to_s3(bronze_root, "bronze")
 
     return counts
 

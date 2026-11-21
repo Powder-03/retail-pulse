@@ -6,7 +6,7 @@ from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql import types as T
 
-from src.config import BRONZE_DIR, DQ_REPORT_PATH, MIN_DQ_PASS_RATE_PCT, SILVER_DIR
+from src.config import AWS_S3_BUCKET, BRONZE_DIR, DQ_REPORT_PATH, MIN_DQ_PASS_RATE_PCT, SILVER_DIR, sync_to_s3
 
 
 def get_spark_session(app_name: str = "SmartRetailSilverETL") -> SparkSession:
@@ -287,6 +287,8 @@ def run_silver_etl(
 
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    if AWS_S3_BUCKET:
+        sync_to_s3(silver_root, "silver")
     return report
 
 

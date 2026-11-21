@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 from pathlib import Path
 import duckdb
 import pandas as pd
@@ -65,7 +66,7 @@ def load_ingestion_logs() -> pd.DataFrame:
 # Sidebar: Pipeline Controls & Global Filters
 # ---------------------------------------------------------------------------
 st.sidebar.title("Smart Retail Intelligence")
-st.sidebar.caption("Local-First Lakehouse • DuckDB + Postgres + Groq")
+st.sidebar.caption("AWS Lakehouse • S3 / RDS + DuckDB + Vertex AI")
 
 col_btn1, col_btn2 = st.sidebar.columns(2)
 if col_btn1.button("Run Full ETL", use_container_width=True, type="primary"):
@@ -87,8 +88,12 @@ categories_df = load_gold_table("SELECT DISTINCT category FROM dim_product ORDER
 suppliers_df = load_gold_table("SELECT DISTINCT supplier_name FROM dim_supplier ORDER BY supplier_name")
 date_bounds = load_gold_table("SELECT MIN(sale_date) AS min_dt, MAX(sale_date) AS max_dt FROM fact_sales")
 
-min_dt = pd.to_datetime(date_bounds["min_dt"].iloc[0]).date()
-max_dt = pd.to_datetime(date_bounds["max_dt"].iloc[0]).date()
+if not date_bounds.empty and "min_dt" in date_bounds.columns and pd.notna(date_bounds["min_dt"].iloc[0]):
+    min_dt = pd.to_datetime(date_bounds["min_dt"].iloc[0]).date()
+    max_dt = pd.to_datetime(date_bounds["max_dt"].iloc[0]).date()
+else:
+    min_dt = datetime.now().date()
+    max_dt = datetime.now().date()
 
 selected_dates = st.sidebar.date_input(
     "Sales Date Range",
@@ -99,15 +104,13 @@ selected_dates = st.sidebar.date_input(
 start_date = selected_dates[0] if isinstance(selected_dates, tuple) and len(selected_dates) > 0 else min_dt
 end_date = selected_dates[1] if isinstance(selected_dates, tuple) and len(selected_dates) > 1 else max_dt
 
-selected_store = st.sidebar.selectbox(
-    "Store", ["All"] + stores_df["store_name"].tolist()
-)
-selected_category = st.sidebar.selectbox(
-    "Product Category", ["All"] + categories_df["category"].tolist()
-)
-selected_supplier = st.sidebar.selectbox(
-    "Supplier", ["All"] + suppliers_df["supplier_name"].tolist()
-)
+stores_list = ["All"] + (stores_df["store_name"].dropna().tolist() if "store_name" in stores_df.columns else [])
+categories_list = ["All"] + (categories_df["category"].dropna().tolist() if "category" in categories_df.columns else [])
+suppliers_list = ["All"] + (suppliers_df["supplier_name"].dropna().tolist() if "supplier_name" in suppliers_df.columns else [])
+
+selected_store = st.sidebar.selectbox("Store", stores_list)
+selected_category = st.sidebar.selectbox("Product Category", categories_list)
+selected_supplier = st.sidebar.selectbox("Supplier", suppliers_list)
 
 # ---------------------------------------------------------------------------
 # Load Filtered Analytical Datasets
@@ -339,7 +342,7 @@ with tab_ai:
     st.subheader("Evidence-Grounded Retail Operations Assistant")
     st.caption(
         "Queries are strictly routed to pre-approved parameterized DuckDB SQL views. "
-        "Only verified result rows and metric definitions are sent to Groq (or deterministic offline fallback)."
+        "Only verified result rows and metric definitions are sent to Vertex AI (Gemini) or deterministic offline fallback."
     )
 
     preset_prompts = [

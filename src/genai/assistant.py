@@ -3,9 +3,17 @@ from dataclasses import dataclass
 from pathlib import Path
 import duckdb
 import pandas as pd
-from groq import Groq
+from google import genai
+from google.genai import types
 
-from src.config import DUCKDB_PATH, GROQ_API_KEY, GROQ_MODEL, SAFETY_BUFFER_DAYS
+from src.config import (
+    DUCKDB_PATH,
+    SAFETY_BUFFER_DAYS,
+    VERTEX_API_KEY,
+    VERTEX_LOCATION,
+    VERTEX_MODEL,
+    VERTEX_PROJECT_ID,
+)
 
 METRIC_DEFINITIONS = {
     "days_of_cover": "on_hand_qty / trailing 14-day average daily units sold.",
@@ -19,7 +27,7 @@ METRIC_DEFINITIONS = {
 class AssistantResponse:
     answer: str
     intent: str
-    mode: str  # "groq" | "deterministic_fallback"
+    mode: str  # "vertex_ai" | "deterministic_fallback"
     evidence_df: pd.DataFrame
     freshness_timestamp: str
 
@@ -233,14 +241,17 @@ def _deterministic_summary(intent: str, df: pd.DataFrame, freshness: str) -> str
     return "\n".join(lines)
 
 
-def _groq_summary(
+def _vertex_ai_summary(
     question: str,
     intent: str,
     df: pd.DataFrame,
     freshness: str,
-    api_key: str,
-    model: str,
+    api_key: str | None = None,
+    project_id: str | None = None,
+    location: str = "us-central1",
+    model: str = VERTEX_MODEL,
 ) -> str:
+    """Generates grounded natural-language answer using Google Cloud Vertex AI / Gemini."""
     if df.empty:
         return (
             f"**Insufficient Evidence (Data as of {freshness}):** The approved SQL query returned zero rows "
@@ -266,17 +277,25 @@ def _groq_summary(
         "verified_sql_rows": evidence_records,
     }
 
-    client = Groq(api_key=api_key)
-    completion = client.chat.completions.create(
+    client_kwargs: dict = {}
+    if api_key:
+        client_kwargs["api_key"] = api_key
+    elif project_id:
+        client_kwargs["vertexai"] = True
+        client_kwargs["project"] = project_id
+        client_kwargs["location"] = location
+
+    client = genai.Client(**client_kwargs)
+    response = client.models.generate_content(
         model=model,
-        temperature=0.1,
-        max_tokens=600,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": json.dumps(user_payload, indent=2)},
-        ],
+        contents=json.dumps(user_payload, indent=2),
+        config=types.GenerateContentConfig(
+            system_instruction=system_prompt,
+            temperature=0.1,
+            max_output_tokens=600,
+        ),
     )
-    return completion.choices[0].message.content.strip()
+    return (response.text or "").strip()
 
 
 def ask_retail_assistant(
@@ -285,9 +304,11 @@ def ask_retail_assistant(
     store_filter: str | None = None,
     category_filter: str | None = None,
     api_key: str | None = None,
-    model: str = GROQ_MODEL,
+    project_id: str | None = None,
+    location: str | None = None,
+    model: str = VERTEX_MODEL,
 ) -> AssistantResponse:
-    """Runs bounded SQL query and generates a grounded explanation via Groq or deterministic fallback."""
+    """Runs bounded SQL query and generates a grounded explanation via Vertex AI (Gemini) or deterministic fallback."""
     intent = _classify_intent(question)
     evidence_df, freshness = _fetch_bounded_evidence(
         intent=intent,
@@ -296,22 +317,37 @@ def ask_retail_assistant(
         category_filter=category_filter,
     )
 
-    effective_key = (api_key if api_key is not None else GROQ_API_KEY).strip()
-    use_groq = bool(effective_key) and effective_key != "your_groq_api_key_here"
+    effective_key = (api_key if api_key is not None else VERTEX_API_KEY).strip()
+    effective_project = (project_id if project_id is not None else VERTEX_PROJECT_ID).strip()
+    effective_loc = (location if location is not None else VERTEX_LOCATION).strip()
 
-    if use_groq:
+    use_vertex = (
+        (bool(effective_key) and effective_key != "your_vertex_api_key_here")
+        or (bool(effective_project) and effective_project != "your-gcp-project-id")
+    )
+
+    if use_vertex:
         try:
-            answer = _groq_summary(question, intent, evidence_df, freshness, effective_key, model)
+            answer = _vertex_ai_summary(
+                question=question,
+                intent=intent,
+                df=evidence_df,
+                freshness=freshness,
+                api_key=effective_key or None,
+                project_id=effective_project or None,
+                location=effective_loc or "us-central1",
+                model=model,
+            )
             return AssistantResponse(
                 answer=answer,
                 intent=intent,
-                mode="groq",
+                mode="vertex_ai",
                 evidence_df=evidence_df,
                 freshness_timestamp=freshness,
             )
         except Exception as exc:
             fallback_text = _deterministic_summary(intent, evidence_df, freshness)
-            answer = f"*(Groq API unavailable: {exc} — switched to deterministic fallback)*\n\n{fallback_text}"
+            answer = f"*(Vertex AI API unavailable: {exc} — switched to deterministic fallback)*\n\n{fallback_text}"
             return AssistantResponse(
                 answer=answer,
                 intent=intent,
